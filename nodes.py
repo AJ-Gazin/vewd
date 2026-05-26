@@ -1,8 +1,10 @@
 import json
+import re
 import shutil
 import base64
 import io
 import struct
+from datetime import datetime
 import numpy as np
 import torch
 from pathlib import Path
@@ -10,6 +12,47 @@ from PIL import Image, ImageDraw, PngImagePlugin
 import folder_paths
 from aiohttp import web
 from server import PromptServer
+
+
+# --- Local patch: folder-name token resolution (matches ComfyUI Save Image) ---
+# Supports %date:FORMAT% (yyyy/yy, MM/M, dd/d, hh/h, mm/m, ss/s) and the
+# simpler %year%/%month%/%day%/%hour%/%minute%/%second% tokens. Not in upstream.
+_DATE_RE = re.compile(r"%date:([^%]+)%")
+_TOKEN_RE = re.compile(r"(yyyy|yy|MM|M|dd|d|hh|h|mm|m|ss|s)")
+
+
+def _format_date(fmt: str, now: datetime) -> str:
+    def sub(m):
+        t = m.group(1)
+        if t == "yyyy": return f"{now.year:04d}"
+        if t == "yy":   return f"{now.year % 100:02d}"
+        if t == "MM":   return f"{now.month:02d}"
+        if t == "M":    return f"{now.month}"
+        if t == "dd":   return f"{now.day:02d}"
+        if t == "d":    return f"{now.day}"
+        if t == "hh":   return f"{now.hour:02d}"
+        if t == "h":    return f"{now.hour}"
+        if t == "mm":   return f"{now.minute:02d}"
+        if t == "m":    return f"{now.minute}"
+        if t == "ss":   return f"{now.second:02d}"
+        if t == "s":    return f"{now.second}"
+        return m.group(0)
+    return _TOKEN_RE.sub(sub, fmt)
+
+
+def resolve_folder_tokens(folder: str) -> str:
+    if not folder or "%" not in folder:
+        return folder
+    now = datetime.now()
+    folder = _DATE_RE.sub(lambda m: _format_date(m.group(1), now), folder)
+    folder = (folder.replace("%year%", f"{now.year:04d}")
+                    .replace("%month%", f"{now.month:02d}")
+                    .replace("%day%", f"{now.day:02d}")
+                    .replace("%hour%", f"{now.hour:02d}")
+                    .replace("%minute%", f"{now.minute:02d}")
+                    .replace("%second%", f"{now.second:02d}"))
+    return folder
+# --- end local patch ---
 
 try:
     import cv2
@@ -318,7 +361,7 @@ class Vewd:
 async def export_selects(request):
     try:
         data = await request.json()
-        folder = data.get("folder", "").strip('"')
+        folder = resolve_folder_tokens(data.get("folder", "").strip('"'))
         prefix = data.get("prefix", "select")
         images = data.get("images", [])
 
@@ -388,7 +431,7 @@ async def export_selects(request):
 async def save_images(request):
     try:
         data = await request.json()
-        folder = data.get("folder", "").strip('"')
+        folder = resolve_folder_tokens(data.get("folder", "").strip('"'))
         prefix = data.get("prefix", "vewd")
         images = data.get("images", [])
 
