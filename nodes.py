@@ -395,13 +395,31 @@ class Vewd:
                 temp_dir = folder_paths.get_temp_directory()
                 Path(temp_dir).mkdir(parents=True, exist_ok=True)
                 token = ''.join(random.choices(string.ascii_lowercase, k=5))
+
+                # Embed prompt + workflow into the PNG, same as ComfyUI's SaveImage.
+                # Without this the input-mode temp file has no graph, so a later save
+                # produces a seed-only PNG (no prompt/workflow for metadata readers).
+                metadata = None
+                try:
+                    from comfy.cli_args import args as _comfy_args
+                    disable_meta = getattr(_comfy_args, "disable_metadata", False)
+                except Exception:
+                    disable_meta = False
+                if not disable_meta:
+                    metadata = PngImagePlugin.PngInfo()
+                    if prompt is not None:
+                        metadata.add_text("prompt", json.dumps(prompt))
+                    if extra_pnginfo is not None:
+                        for k, v in extra_pnginfo.items():
+                            metadata.add_text(k, json.dumps(v))
+
                 ui_images = []
                 idx = 0
                 for tensor in wired_inputs:
                     for i in range(tensor.shape[0]):
                         arr = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
                         fname = f"vewd_input_{token}_{idx:03d}.png"
-                        Image.fromarray(arr).save(Path(temp_dir) / fname)
+                        Image.fromarray(arr).save(Path(temp_dir) / fname, pnginfo=metadata)
                         ui_images.append({"filename": fname, "subfolder": "", "type": "temp"})
                         idx += 1
                 # Emit under a private key (not "images") so ComfyUI doesn't draw its

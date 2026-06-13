@@ -47,6 +47,13 @@ There is a single global grid widget (`globalVewdWidget`); multiple Vewd nodes s
   (`widget._node`) and read `node.id` / widget values at event time.
 - The widgets `folder`, `filename_prefix`, `selected_media` are spliced out of
   `node.widgets` in `nodeCreated` and rendered as DOM inputs instead.
+- **Any PNG the node writes itself must embed the graph.** `capture="input"` mode writes
+  its own temp PNGs from the wired tensor; these MUST be saved with a `PngInfo` carrying
+  `prompt` + every `extra_pnginfo` key (i.e. `workflow`), exactly like ComfyUI's SaveImage —
+  otherwise the saved file is metadata-less (seed-only) and tools like Image-MetaHub can't
+  read the prompt/workflow. `copy_with_metadata` only *preserves* existing chunks; it can't
+  add a graph that was never embedded. Auto-capture is exempt (it scrapes ComfyUI's own
+  temp files, which already carry the graph). Respect the `--disable-metadata` server flag.
 
 ## Features that exercise the above (see git log + `Local patch` blocks for detail)
 - `capture` combo: `auto` (scrape whole workflow) vs `input` (only this node's wired
