@@ -1552,13 +1552,7 @@ app.registerExtension({
 
     // Sync widget values BEFORE ComfyUI serializes the prompt
     async beforeQueuePrompt() {
-        if (globalVewdWidget) {
-            // Local patch: refresh capture mode from the live widget (a loaded
-            // workflow restores the combo value without firing its callback)
-            const cw = globalVewdWidget._node?.widgets?.find(w => w.name === "capture");
-            if (cw) globalVewdWidget.captureMode = cw.value;
-            globalVewdWidget.syncToBackend();
-        }
+        if (globalVewdWidget) globalVewdWidget.syncToBackend();
     },
 
     async setup() {
@@ -1632,8 +1626,14 @@ app.registerExtension({
 
             // Local patch: "input" capture mode — accept only this Vewd node's own
             // emitted preview (the wired tensor); drop every other node's output.
-            if (globalVewdWidget.captureMode === "input" &&
-                String(detail?.node) !== String(globalVewdWidget._nodeId)) return;
+            // Read the combo value AND the node id LIVE from the node reference: on a
+            // loaded workflow ComfyUI restores the combo and assigns node.id only AFTER
+            // nodeCreated runs, so anything cached at creation time would be stale.
+            const vewdNode = globalVewdWidget._node;
+            const captureWidget = vewdNode?.widgets?.find(w => w.name === "capture");
+            const captureMode = captureWidget?.value ?? "auto";
+            if (captureMode === "input" &&
+                String(detail?.node) !== String(vewdNode?.id)) return;
 
             // Resolve seed from the dependency chain of the node that produced output
             try {
@@ -1681,6 +1681,11 @@ app.registerExtension({
             // Handle images (detect videos by extension)
             if (output?.images) {
                 output.images.forEach(img => addOutput(img, "image"));
+            }
+
+            // Local patch: Vewd's own input-mode previews (private key, no native preview)
+            if (output?.vewd_images) {
+                output.vewd_images.forEach(img => addOutput(img, "image"));
             }
 
             // Handle GIFs (VHS nodes / Video Combine) — display as images so browsers loop them natively
@@ -1797,18 +1802,10 @@ app.registerExtension({
         node.vewdWidget = widget;
         globalVewdWidget = widget;
 
-        // Local patch: track capture mode + node id for "input"-only capture
-        widget._nodeId = node.id;
+        // Local patch: keep a live node reference; the "input"-mode capture guard
+        // reads the capture combo value and node id from it at event time (caching
+        // either here is unsafe — a loaded workflow sets them only after this runs).
         widget._node = node;
-        const captureWidget = node.widgets?.find(w => w.name === "capture");
-        widget.captureMode = captureWidget?.value ?? "auto";
-        if (captureWidget) {
-            const origCb = captureWidget.callback;
-            captureWidget.callback = function (v) {
-                widget.captureMode = v;
-                return origCb ? origCb.apply(this, arguments) : undefined;
-            };
-        }
 
         node.addDOMWidget("vewd_ui", "custom", widget.el, {
             serialize: false,

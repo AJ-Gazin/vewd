@@ -189,6 +189,13 @@ class Vewd:
     RETURN_NAMES = ("output",)
     FUNCTION = "process"
     CATEGORY = "image"
+    # --- Local patch: mark as a terminal node (not in upstream) ---
+    # ComfyUI prunes any branch that doesn't reach an OUTPUT_NODE. Without this,
+    # wiring a node solely into Vewd's input leaves that branch with no consumer,
+    # so its upstream (e.g. Ultimate SD Upscale) never executes. Marking Vewd as an
+    # output node forces its wired inputs to run, same as Preview Image / Save Image.
+    OUTPUT_NODE = True
+    # --- end local patch ---
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -389,7 +396,9 @@ class Vewd:
                         Image.fromarray(arr).save(Path(temp_dir) / fname)
                         ui_images.append({"filename": fname, "subfolder": "", "type": "temp"})
                         idx += 1
-                result["ui"] = {"images": ui_images}
+                # Emit under a private key (not "images") so ComfyUI doesn't draw its
+                # native under-node preview — the Vewd grid is the only consumer.
+                result["ui"] = {"vewd_images": ui_images}
             except Exception as e:
                 print(f"[Vewd] input-mode preview save failed: {e}")
         # --- end local patch ---
