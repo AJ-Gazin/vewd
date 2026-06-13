@@ -1552,7 +1552,13 @@ app.registerExtension({
 
     // Sync widget values BEFORE ComfyUI serializes the prompt
     async beforeQueuePrompt() {
-        if (globalVewdWidget) globalVewdWidget.syncToBackend();
+        if (globalVewdWidget) {
+            // Local patch: refresh capture mode from the live widget (a loaded
+            // workflow restores the combo value without firing its callback)
+            const cw = globalVewdWidget._node?.widgets?.find(w => w.name === "capture");
+            if (cw) globalVewdWidget.captureMode = cw.value;
+            globalVewdWidget.syncToBackend();
+        }
     },
 
     async setup() {
@@ -1623,6 +1629,11 @@ app.registerExtension({
             if (!globalVewdWidget) return;
 
             const output = detail?.output;
+
+            // Local patch: "input" capture mode — accept only this Vewd node's own
+            // emitted preview (the wired tensor); drop every other node's output.
+            if (globalVewdWidget.captureMode === "input" &&
+                String(detail?.node) !== String(globalVewdWidget._nodeId)) return;
 
             // Resolve seed from the dependency chain of the node that produced output
             try {
@@ -1785,6 +1796,19 @@ app.registerExtension({
         const widget = createVewdWidget(node);
         node.vewdWidget = widget;
         globalVewdWidget = widget;
+
+        // Local patch: track capture mode + node id for "input"-only capture
+        widget._nodeId = node.id;
+        widget._node = node;
+        const captureWidget = node.widgets?.find(w => w.name === "capture");
+        widget.captureMode = captureWidget?.value ?? "auto";
+        if (captureWidget) {
+            const origCb = captureWidget.callback;
+            captureWidget.callback = function (v) {
+                widget.captureMode = v;
+                return origCb ? origCb.apply(this, arguments) : undefined;
+            };
+        }
 
         node.addDOMWidget("vewd_ui", "custom", widget.el, {
             serialize: false,

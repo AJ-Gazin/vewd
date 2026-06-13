@@ -4,6 +4,8 @@ import shutil
 import base64
 import io
 import struct
+import random
+import string
 from datetime import datetime
 import numpy as np
 import torch
@@ -159,9 +161,21 @@ class Vewd:
             "required": {},
             "optional": {
                 "input": ("IMAGE",),
+                # --- Local patch: extra accumulate sockets (not in upstream) ---
+                # In capture="input" mode every connected socket becomes its own grid
+                # tile (any resolution). e.g. wire original -> input, upscaled -> input_2.
+                "input_2": ("IMAGE",),
+                "input_3": ("IMAGE",),
+                "input_4": ("IMAGE",),
+                # --- end local patch ---
                 "folder": ("STRING", {"default": "C:/AI/comfy/ComfyUI/output/vewd"}),
                 "filename_prefix": ("STRING", {"default": "vewd"}),
                 "max_frames": ("INT", {"default": 0, "min": 0, "max": 9999, "step": 1, "tooltip": "Max video frames to extract (0 = all)"}),
+                # --- Local patch: capture mode (not in upstream) ---
+                # auto  = grab every image-emitting node in the workflow (whole-workflow scrape; matches vewdtab)
+                # input = show only the tensor wired into this node's `input` socket
+                "capture": (["auto", "input"], {"default": "auto", "tooltip": "auto = capture all workflow images; input = only the wired input"}),
+                # --- end local patch ---
                 "selected_media": ("STRING", {"default": ""}),
             },
             "hidden": {
@@ -180,15 +194,19 @@ class Vewd:
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
 
-    def process(self, input=None, folder="", filename_prefix="vewd", max_frames=0, selected_media="", prompt=None, extra_pnginfo=None, unique_id=None):
+    def process(self, input=None, input_2=None, input_3=None, input_4=None, folder="", filename_prefix="vewd", max_frames=0, capture="auto", selected_media="", prompt=None, extra_pnginfo=None, unique_id=None):
         folder = folder.strip('"')
         result = {"ui": {"vewd_images": []}}
         img_tensor = None
         node_key = str(unique_id) if unique_id else None
 
+        # Local patch: all connected accumulate sockets, in order (used by capture="input")
+        wired_inputs = [t for t in (input, input_2, input_3, input_4) if t is not None]
+
         # Priority: wired input > selected_media widget > video store > image store > screenshot store > black fallback
-        if input is not None:
-            img_tensor = input
+        # Passthrough output uses the first connected socket (keeps downstream stable).
+        if wired_inputs:
+            img_tensor = wired_inputs[0]
 
         # Parse selected_media widget (cloud-compatible passthrough)
         # Supports array of items (multi-select → batch tensor) or single object (legacy)
@@ -351,6 +369,30 @@ class Vewd:
         # Always return an image tensor (black 512x512 fallback)
         if img_tensor is None:
             img_tensor = torch.zeros(1, 512, 512, 3)
+
+        # --- Local patch: capture="input" — surface the wired tensor(s) as grid previews ---
+        # Saves every connected accumulate socket (each frame of each), so original +
+        # upscaled land as separate tiles at their own resolutions. Only emits when
+        # something is wired in (skips the black fallback). The frontend listener drops
+        # every other node's output while in "input" mode, so these are the sole sources.
+        if capture == "input" and wired_inputs:
+            try:
+                temp_dir = folder_paths.get_temp_directory()
+                Path(temp_dir).mkdir(parents=True, exist_ok=True)
+                token = ''.join(random.choices(string.ascii_lowercase, k=5))
+                ui_images = []
+                idx = 0
+                for tensor in wired_inputs:
+                    for i in range(tensor.shape[0]):
+                        arr = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+                        fname = f"vewd_input_{token}_{idx:03d}.png"
+                        Image.fromarray(arr).save(Path(temp_dir) / fname)
+                        ui_images.append({"filename": fname, "subfolder": "", "type": "temp"})
+                        idx += 1
+                result["ui"] = {"images": ui_images}
+            except Exception as e:
+                print(f"[Vewd] input-mode preview save failed: {e}")
+        # --- end local patch ---
 
         result["result"] = (img_tensor,)
         return result
