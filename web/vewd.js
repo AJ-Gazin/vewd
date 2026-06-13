@@ -1688,6 +1688,17 @@ app.registerExtension({
                 output.vewd_images.forEach(img => addOutput(img, "image"));
             }
 
+            // Local patch: wire-driven prefix — upstream STRING sets the save prefix field
+            if (output?.vewd_prefix && globalVewdWidget.prefixInput) {
+                // ui values arrive as lists; take the first element
+                const p = Array.isArray(output.vewd_prefix) ? output.vewd_prefix[0] : output.vewd_prefix;
+                if (p) {
+                    globalVewdWidget.prefixInput.value = p;
+                    // fire "input" so the localStorage persist + hidden-widget sync run
+                    globalVewdWidget.prefixInput.dispatchEvent(new Event("input"));
+                }
+            }
+
             // Handle GIFs (VHS nodes / Video Combine) — display as images so browsers loop them natively
             if (output?.gifs) {
                 output.gifs.forEach(gif => {
@@ -1783,7 +1794,7 @@ app.registerExtension({
             }
 
             // Debug: log unknown output types to console
-            const knownKeys = new Set(["images", "gifs", "videos", "video", "audio", "audios", "audio_file", "audio_codes", "text", "mesh", "model_file", "GLB", "OBJ", "3d", "result", "vewd_images", "ply_file", "filename", "file_size_mb", "extrinsics", "intrinsics"]);
+            const knownKeys = new Set(["images", "gifs", "videos", "video", "audio", "audios", "audio_file", "audio_codes", "text", "mesh", "model_file", "GLB", "OBJ", "3d", "result", "vewd_images", "vewd_prefix", "ply_file", "filename", "file_size_mb", "extrinsics", "intrinsics"]);
             Object.keys(output || {}).forEach(key => {
                 if (!knownKeys.has(key)) {
                     console.log("[Vewd] Unknown output key:", key, output[key]);
@@ -1806,6 +1817,25 @@ app.registerExtension({
         // reads the capture combo value and node id from it at event time (caching
         // either here is unsafe — a loaded workflow sets them only after this runs).
         widget._node = node;
+
+        // Local patch: when the prefix socket is wired, the wire drives the prefix —
+        // disable the text field so it's clear the value comes from the wire (it gets
+        // overwritten on every run via the vewd_prefix round-trip otherwise).
+        const updatePrefixLock = () => {
+            const slot = node.inputs?.find(i => i.name === "prefix");
+            const wired = !!(slot && slot.link != null);
+            if (!widget.prefixInput) return;
+            widget.prefixInput.disabled = wired;
+            widget.prefixInput.placeholder = wired ? "(from wire)" : "";
+        };
+        const origOnConnectionsChange = node.onConnectionsChange;
+        node.onConnectionsChange = function (...a) {
+            const r = origOnConnectionsChange ? origOnConnectionsChange.apply(this, a) : undefined;
+            updatePrefixLock();
+            return r;
+        };
+        // Links are restored after nodeCreated on workflow load — check on next tick.
+        setTimeout(updatePrefixLock, 0);
 
         node.addDOMWidget("vewd_ui", "custom", widget.el, {
             serialize: false,

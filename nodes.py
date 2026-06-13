@@ -177,6 +177,14 @@ class Vewd:
                 "capture": (["auto", "input"], {"default": "auto", "tooltip": "auto = capture all workflow images; input = only the wired input"}),
                 # --- end local patch ---
                 "selected_media": ("STRING", {"default": ""}),
+                # --- Local patch: wire-driven prefix (not in upstream) ---
+                # MUST stay last: appending keeps positional widget values of older
+                # saved workflows aligned (inserting mid-list shifts them and breaks
+                # max_frames/capture). Optional STRING socket — when connected, its
+                # value (e.g. a shortened model name) is pushed into the grid's prefix
+                # field at run time so saved files use it.
+                "prefix": ("STRING", {"forceInput": True}),
+                # --- end local patch ---
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -201,7 +209,7 @@ class Vewd:
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
 
-    def process(self, input=None, input_2=None, input_3=None, input_4=None, folder="", filename_prefix="vewd", max_frames=0, capture="auto", selected_media="", prompt=None, extra_pnginfo=None, unique_id=None):
+    def process(self, input=None, input_2=None, input_3=None, input_4=None, folder="", filename_prefix="vewd", prefix=None, max_frames=0, capture="auto", selected_media="", prompt=None, extra_pnginfo=None, unique_id=None):
         folder = folder.strip('"')
         result = {"ui": {"vewd_images": []}}
         img_tensor = None
@@ -403,6 +411,13 @@ class Vewd:
                 print(f"[Vewd] input-mode preview save failed: {e}")
         # --- end local patch ---
 
+        # --- Local patch: push wired prefix to the grid's prefix field ---
+        # Wrap in a list: ComfyUI expects ui values to be lists and otherwise coerces
+        # a bare string into list(str) — i.e. one element per character ("o","n",...).
+        if prefix is not None and str(prefix).strip():
+            result.setdefault("ui", {})["vewd_prefix"] = [str(prefix).strip()]
+        # --- end local patch ---
+
         result["result"] = (img_tensor,)
         return result
 
@@ -497,10 +512,26 @@ async def save_images(request):
         input_dir = folder_paths.get_input_directory()
         count = 0
 
-        # Find next available number per seed
-        seed_counters = {}
+        # --- Local patch: name saved files prefix_NNN (no seed in filename) ---
+        # Continue numbering from the highest existing {prefix}_NNN{ext} in the folder.
+        # The seed is still embedded in PNG metadata via copy_with_metadata below.
+        prefix_counters = {}
 
-        for i, img_info in enumerate(images):
+        def next_number(pfx, ext):
+            key = (pfx, ext)
+            if key not in prefix_counters:
+                pat = re.compile(re.escape(pfx) + r"_(\d+)" + re.escape(ext) + r"$", re.IGNORECASE)
+                highest = 0
+                for f in save_dir.glob(f"{pfx}_*{ext}"):
+                    m = pat.match(f.name)
+                    if m:
+                        highest = max(highest, int(m.group(1)))
+                prefix_counters[key] = highest
+            prefix_counters[key] += 1
+            return prefix_counters[key]
+        # --- end local patch ---
+
+        for img_info in images:
             if isinstance(img_info, str):
                 filename = img_info
                 subfolder = ""
@@ -528,17 +559,8 @@ async def save_images(request):
                     save_ext = orig_ext
                 else:
                     save_ext = ".png"
-                if seed:
-                    # With seed: prefix_seed_001.ext
-                    seed_key = seed
-                    if seed_key not in seed_counters:
-                        seed_counters[seed_key] = len(list(save_dir.glob(f"{prefix}_{seed}_*{save_ext}")))
-                    seed_counters[seed_key] += 1
-                    new_name = f"{prefix}_{seed}_{seed_counters[seed_key]:03d}{save_ext}"
-                else:
-                    # No seed: use original ComfyUI filename
-                    orig_stem = Path(filename).stem
-                    new_name = f"{prefix}_{orig_stem}{save_ext}"
+                # Local patch: prefix_NNN naming (seed kept in PNG metadata, not filename)
+                new_name = f"{prefix}_{next_number(prefix, save_ext):03d}{save_ext}"
                 dst_path = save_dir / new_name
                 copy_with_metadata(src_path, dst_path, seed)
                 count += 1
