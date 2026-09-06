@@ -1624,6 +1624,19 @@ app.registerExtension({
 
             const output = detail?.output;
 
+            // Skip captures from PreviewImage. PreviewImage re-emits whatever it
+            // received as ui.images, so capturing it would loop Vewd's own output
+            // back into its grid and hijack selection every run.
+            // Local patch: Vewd itself is NOT skipped here (upstream skips it). This
+            // fork's Vewd emits only private keys (vewd_images / vewd_prefix) that the
+            // input-mode capture and wired prefix below depend on, never ui.images.
+            try {
+                if (lastPromptData && detail?.node) {
+                    const cls = lastPromptData[String(detail.node)]?.class_type;
+                    if (cls === "PreviewImage") return;
+                }
+            } catch (e) {}
+
             // Local patch: "input" capture mode — accept only this Vewd node's own
             // emitted preview (the wired tensor); drop every other node's output.
             // Read the combo value AND the node id LIVE from the node reference: on a
