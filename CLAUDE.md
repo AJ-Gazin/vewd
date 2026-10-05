@@ -46,7 +46,18 @@ There is a single global grid widget (`globalVewdWidget`); multiple Vewd nodes s
   widget values aren't set yet — do **not** cache them there. Keep a live `node` reference
   (`widget._node`) and read `node.id` / widget values at event time.
 - The widgets `folder`, `filename_prefix`, `selected_media` are spliced out of
-  `node.widgets` in `nodeCreated` and rendered as DOM inputs instead.
+  `node.widgets` in `nodeCreated` and rendered as DOM inputs instead. Because they're
+  spliced, they are never saved in the workflow.
+- **Per-node state goes in `node.properties`, never localStorage keyed by `node.id`.**
+  `node.id` is unassigned in `nodeCreated`, so upstream's `vewd_${node.id}` key was one
+  key shared by every Vewd node in every workflow. Folder, prefix and the auto/lock
+  toggles are `node.properties.save_folder` / `save_prefix` / `auto_export` /
+  `lock_selection`. They are seeded in `nodeCreated` and re-applied in `onConfigure`
+  (which runs after a saved node's properties are merged in). `vewd_last_settings` in
+  localStorage only seeds brand-new nodes. Re-ordering widgets can't break these.
+- Upstream's `executed` handler skips `Vewd` and `PreviewImage` sources; the fork skips
+  only `PreviewImage`, because input-mode capture and the wired prefix arrive as the Vewd
+  node's own `executed` event.
 - **Any PNG the node writes itself must embed the graph.** `capture="input"` mode writes
   its own temp PNGs from the wired tensor; these MUST be saved with a `PngInfo` carrying
   `prompt` + every `extra_pnginfo` key (i.e. `workflow`), exactly like ComfyUI's SaveImage —

@@ -1540,7 +1540,8 @@ function createVewdWidget(node) {
         if (hintSpan) hintSpan.textContent = "spacebar ❤ | esc exit";
     }
 
-    return { el, addImage, addMedia, state, autoExportTagged, folderInput, prefixInput, seenImages, restoreState, persistState, syncToBackend };
+    // Local patch: update exposed so per-workflow settings can redraw the toggles
+    return { el, addImage, addMedia, state, autoExportTagged, folderInput, prefixInput, seenImages, restoreState, persistState, syncToBackend, update };
 }
 
 // Global widget reference
@@ -1870,18 +1871,47 @@ app.registerExtension({
         // Attach hiddenWidgets to syncToBackend so it can access selected_media
         widget.syncToBackend._hiddenWidgets = hiddenWidgets;
 
-        // Persist folder/prefix via localStorage (keyed per node ID)
-        const storageKey = `vewd_${node.id}`;
-        const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        // --- Local patch: per-workflow settings ---
+        // folder, prefix and the auto/lock toggles live in node.properties, which is
+        // saved with the node, so every workflow (and every Vewd node) keeps its own.
+        // Upstream keys localStorage by `vewd_${node.id}`, but node.id is unassigned
+        // this early, so that was one key shared by every Vewd node in every workflow.
+        // A new node starts from the last-used folder/prefix (falling back to that old
+        // shared key); configure() then overwrites these with a saved node's values.
+        const lastUsed = JSON.parse(localStorage.getItem("vewd_last_settings")
+            ?? localStorage.getItem(`vewd_${node.id}`) ?? "{}");
+        node.properties.save_folder ??= lastUsed.folder ?? hiddenWidgets["folder"]?.value ?? "";
+        node.properties.save_prefix ??= lastUsed.prefix ?? hiddenWidgets["filename_prefix"]?.value ?? "";
+        node.properties.auto_export ??= false;
+        node.properties.lock_selection ??= false;
 
-        // Restore saved values (or fall back to hidden widget defaults)
-        widget.folderInput.value = saved.folder ?? hiddenWidgets["folder"]?.value ?? "";
-        widget.prefixInput.value = saved.prefix ?? hiddenWidgets["filename_prefix"]?.value ?? "";
+        function applySettings() {
+            widget.folderInput.value = node.properties.save_folder;
+            widget.prefixInput.value = node.properties.save_prefix;
+            widget.state.autoExport = !!node.properties.auto_export;
+            widget.state.locked = !!node.properties.lock_selection;
+            if (hiddenWidgets["folder"]) hiddenWidgets["folder"].value = widget.folderInput.value;
+            if (hiddenWidgets["filename_prefix"]) hiddenWidgets["filename_prefix"].value = widget.prefixInput.value;
+            widget.update();
+        }
+        applySettings();
+        const origOnConfigure = node.onConfigure;
+        node.onConfigure = function (...a) {
+            const r = origOnConfigure?.apply(this, a);
+            applySettings();
+            return r;
+        };
 
         function persist() {
-            localStorage.setItem(storageKey, JSON.stringify({
-                folder: widget.folderInput.value,
-                prefix: widget.prefixInput.value
+            node.properties.save_folder = widget.folderInput.value;
+            // A wired prefix is rewritten on every run; storing it would mark the
+            // workflow modified after each run.
+            if (!widget.prefixInput.disabled) node.properties.save_prefix = widget.prefixInput.value;
+            node.properties.auto_export = widget.state.autoExport;
+            node.properties.lock_selection = widget.state.locked;
+            localStorage.setItem("vewd_last_settings", JSON.stringify({
+                folder: node.properties.save_folder,
+                prefix: node.properties.save_prefix
             }));
             // Also sync to hidden widgets for the backend
             if (hiddenWidgets["folder"]) hiddenWidgets["folder"].value = widget.folderInput.value;
@@ -1889,6 +1919,10 @@ app.registerExtension({
         }
         widget.folderInput.addEventListener("input", persist);
         widget.prefixInput.addEventListener("input", persist);
+        // Registered after the buttons' own onclick, so state is already toggled.
+        widget.el.querySelector(".auto-export-btn").addEventListener("click", persist);
+        widget.el.querySelector(".lock-btn").addEventListener("click", persist);
+        // --- end local patch ---
 
         widget.restoreState();
 
